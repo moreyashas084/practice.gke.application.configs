@@ -10,11 +10,11 @@ permissions:
   id-token: write
 
 jobs:
-  # JOB 1: Simply detect who changed what
+  # JOB 1: Detect which team folders have modifications
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
-      teams: ${{ steps.filter.outputs.changes }} # This outputs a clean JSON array
+      teams: ${{ steps.filter.outputs.changes }}
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
@@ -26,39 +26,40 @@ jobs:
         filters: |
           team-a: 'team-a/**'
           team-b: 'team-b/**'
-          team-c: 'team-c/**' # To add a new team down the road, just add a line here!
+          team-c: 'team-c/**'
 
   # JOB 2: Run parallel deployments for the matched folders
   deploy:
     needs: detect-changes
-    # Only run if the array isn't empty
     if: ${{ needs.detect-changes.outputs.teams != '[]' && needs.detect-changes.outputs.teams != '' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
         team: ${{ fromJson(needs.detect-changes.outputs.teams) }}
-      fail-fast: false # If team-a fails, don't stop team-b from deploying
+      fail-fast: false
     
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
 
+    # Generates standard Application Default Credentials (ADC) for gcloud
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-    - name: Set up gcloud
+    # Installs and configures the gcloud CLI on the runner
+    - name: Set up gcloud CLI
       uses: google-github-actions/setup-gcloud@v2
 
+    # NATIVE GCLOUD APPROACH: Fetches kubeconfig via Connect Gateway Fleet Membership
     - name: Set up GKE Credentials via Connect Gateway
-      uses: google-github-actions/get-gke-credentials@v2
-      with:
-        cluster_name: 'autopilot-cluster' # Swap with your actual cluster name
-        location: 'us-central1'
-        project_id: 'gke-application-project'
-        use_connect_gateway: true
+      run: |
+        gcloud container fleet memberships get-credentials autopilot-cluster \
+          --project=gke-application-project \
+          --location=us-central1
 
+    # Executes deployment safely across the matrix
     - name: Dynamically Deploy to GKE
       run: |
         TEAM="${{ matrix.team }}"
