@@ -57,10 +57,10 @@ jobs:
       run: |
             # Creates a local background tunnel on the runner (e.g., port 8443) 
             # that routes through your bastion VM to the GKE Master IP
-            gcloud compute start-iap-tunnel bastion-vm-name 443 \
+            gcloud compute start-iap-tunnel gke-bastion 443 \
             --local-host-port=localhost:8443 \
             --zone=us-central1-a \
-            --project=gke-application-project &
+            --project=gke-application-projects &
             
             # Give the tunnel a couple of seconds to spin up
             sleep 5
@@ -73,8 +73,8 @@ jobs:
         --internal-ip
         
         # # Manually override the kubeconfig endpoint to target our local tunnel port
-        # kubectl config set-cluster gke_gke-application-project_us-central1_autopilot-cluster \
-        # --server=https://localhost:8443 --insecure-skip-tls-verify=true
+        kubectl config set-cluster gke_gke-application-project_us-central1_autopilot-cluster \
+        --server=https://localhost:8443 --insecure-skip-tls-verify=true
 
     # Executes deployment safely across the matrix
     - name: Dynamically Deploy to GKE
