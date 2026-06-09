@@ -32,7 +32,7 @@ jobs:
   deploy:
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.teams != '[]' && needs.detect-changes.outputs.teams != '' }}
-    runs-on: [self-hosted, gcp-vpc]
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         team: ${{ fromJson(needs.detect-changes.outputs.teams) }}
@@ -53,11 +53,28 @@ jobs:
       uses: google-github-actions/setup-gcloud@v2
 
     # NATIVE GCLOUD APPROACH: Fetches kubeconfig via Connect Gateway Fleet Membership
-    - name: Set up GKE Credentials via Connect Gateway
+    - name: Start IAP Tunnel through Bastion
       run: |
-        gcloud container fleet memberships get-credentials autopilot-cluster \
-          --project=gke-application-project \
-          --location=us-central1
+            # Creates a local background tunnel on the runner (e.g., port 8443) 
+            # that routes through your bastion VM to the GKE Master IP
+            gcloud compute start-iap-tunnel bastion-vm-name 443 \
+            --local-host-port=localhost:8443 \
+            --zone=us-central1-a \
+            --project=gke-application-project &
+            
+            # Give the tunnel a couple of seconds to spin up
+            sleep 5
+
+    - name: Connect kubectl to Local Tunnel
+      run: |
+        gcloud container clusters get-credentials autopilot-cluster \
+        --region us-central1 \
+        --project gke-application-project \
+        --internal-ip
+        
+        # # Manually override the kubeconfig endpoint to target our local tunnel port
+        # kubectl config set-cluster gke_gke-application-project_us-central1_autopilot-cluster \
+        # --server=https://localhost:8443 --insecure-skip-tls-verify=true
 
     # Executes deployment safely across the matrix
     - name: Dynamically Deploy to GKE
