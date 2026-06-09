@@ -1,18 +1,24 @@
-name: Dynamic Monorepo GKE Deployer (Bastion Runner)
+name: Dynamic Monorepo GKE Deployer
 
 on:
   push:
     branches:
       - main
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
+  # JOB 1: Detect which team folders have modifications
   detect-changes:
-    runs-on: ubuntu-latest # This can stay public just to parse git text
+    runs-on: ubuntu-latest
     outputs:
       teams: ${{ steps.filter.outputs.changes }}
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
+
     - name: Filter Changed Folders
       id: filter
       uses: dorny/paths-filter@v3
@@ -20,27 +26,38 @@ jobs:
         filters: |
           team-a: 'team-a/**'
           team-b: 'team-b/**'
+          team-c: 'team-c/**'
 
+  # JOB 2: Run parallel deployments for the matched folders
   deploy:
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.teams != '[]' && needs.detect-changes.outputs.teams != '' }}
-    runs-on: self-hosted # <-- TARGETS YOUR BASTION VM
+    runs-on: [self-hosted, gcp-vpc]
     strategy:
       matrix:
-        team: ${{ fromJson(needs.needs-changes.outputs.teams) }}
+        team: ${{ fromJson(needs.detect-changes.outputs.teams) }}
       fail-fast: false
     
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    # The VM uses its attached IAM Service Account automatically
-    - name: Set up GKE Credentials via Internal IP
+    # Generates standard Application Default Credentials (ADC) for gcloud
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    # Installs and configures the gcloud CLI on the runner
+    - name: Set up gcloud CLI
+      uses: google-github-actions/setup-gcloud@v2
+
+    # NATIVE GCLOUD APPROACH: Fetches kubeconfig via Connect Gateway Fleet Membership
+    - name: Set up GKE Credentials via Connect Gateway
       run: |
-        gcloud container clusters get-credentials autopilot-cluster \
-          --region us-central1 \
-          --project gke-application-project \
-          --internal-ip
+        gcloud container fleet memberships get-credentials autopilot-cluster \
+          --project=gke-application-project \
+          --location=us-central1
 
     # Executes deployment safely across the matrix
     - name: Dynamically Deploy to GKE
