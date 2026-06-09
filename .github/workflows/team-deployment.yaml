@@ -1,0 +1,83 @@
+name: Dynamic Monorepo GKE Deployer
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  # JOB 1: Simply detect who changed what
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      teams: ${{ steps.filter.outputs.changes }} # This outputs a clean JSON array
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Filter Changed Folders
+      id: filter
+      uses: dorny/paths-filter@v3
+      with:
+        filters: |
+          team-a: 'team-a/**'
+          team-b: 'team-b/**'
+          team-c: 'team-c/**' # To add a new team down the road, just add a line here!
+
+  # JOB 2: Run parallel deployments for the matched folders
+  deploy:
+    needs: detect-changes
+    # Only run if the array isn't empty
+    if: ${{ needs.detect-changes.outputs.teams != '[]' && needs.detect-changes.outputs.teams != '' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        team: ${{ fromJson(needs.detect-changes.outputs.teams) }}
+      fail-fast: false # If team-a fails, don't stop team-b from deploying
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up GKE Credentials via Connect Gateway
+      uses: google-github-actions/get-gke-credentials@v2
+      with:
+        cluster_name: 'autopilot-cluster' # Swap with your actual cluster name
+        location: 'us-central1'
+        project_id: 'gke-application-project'
+        use_connect_gateway: true
+
+    - name: Dynamically Deploy to GKE
+      run: |
+        TEAM="${{ matrix.team }}"
+        NAMESPACE="${TEAM}-environment"
+        
+        echo "🚀 Starting deployment for: $TEAM"
+        echo "Targeting Namespace: $NAMESPACE"
+        
+        # 1. Handle Namespace (Idempotent creation)
+        if [ -f "$TEAM/k8s/namespace.yaml" ]; then
+          kubectl apply -f $TEAM/k8s/namespace.yaml
+        else
+          kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+        fi
+        
+        # 2. Apply the rest of the manifests inside the team's k8s folder
+        kubectl apply -f $TEAM/k8s/ -n $NAMESPACE
+        
+        # 3. Dynamic Rollout Verification
+        DEPLOYMENTS=$(grep -r "kind: Deployment" $TEAM/k8s/ -l | xargs -I {} grep "name:" {} | awk '{print $2}' | sort -u || true)
+        for dep in $DEPLOYMENTS; do
+          if [ ! -z "$dep" ]; then
+            kubectl rollout status deployment/$dep -n $NAMESPACE --timeout=90s
+          fi
+        done
