@@ -48,6 +48,9 @@ jobs:
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
 
+    - name: Set up gcloud
+      uses: google-github-actions/setup-gcloud@v2
+
     - name: Set up GKE Credentials via Connect Gateway
       uses: google-github-actions/get-gke-credentials@v2
       with:
